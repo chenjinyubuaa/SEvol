@@ -5,7 +5,6 @@ import torch.nn as nn
 import math
 from param import args
 
-
 class SEM(torch.nn.Module):
     def __init__(self,args,activation):
         super().__init__()
@@ -19,9 +18,8 @@ class SEM(torch.nn.Module):
         self.activation = activation
         self.GCN_init_mapping = Parameter(torch.Tensor(1,args.gcn_dim))
         self.init_mapping = nn.Sequential(nn.Linear(args.rnn_dim,args.gcn_dim),nn.Tanh())
-        if args.static_gcn_weights or args.static_gcn_weights_only:
-            self.static_weights = nn.Parameter(torch.Tensor(args.gcn_dim,args.gcn_dim))
-            self.reset_param(self.static_weights)
+        self.static_weights = nn.Parameter(torch.Tensor(args.gcn_dim,args.gcn_dim))
+        self.reset_param(self.static_weights)
         self.reset_param(self.GCN_init_mapping)
         self.GCN_pre_weights = None
         self.GCN_init_weights = None
@@ -47,15 +45,11 @@ class SEM(torch.nn.Module):
             di = di.pow(-1/2)
             Ahat =  di.unsqueeze(1)*Ahat*di.unsqueeze(-1).detach()
             node_embs = self.activation(Ahat.matmul(node_embs.matmul(GCN_weights)))
-            if args.static_gcn_weights:
-                node_embs1 = self.activation(Ahat.matmul(node_embs.matmul(self.static_weights)))
-                node_embs = (node_embs+node_embs1)/2
-            if args.static_gcn_weights_only:
-                node_embs1 = self.activation(Ahat.matmul(node_embs.matmul(self.static_weights)))
-                node_embs = node_embs1
+            node_embs1 = self.activation(Ahat.matmul(node_embs.matmul(self.static_weights)))
+            node_embs = (node_embs+node_embs1)/2
             self.GCN_pre_weights = GCN_weights
         return node_embs,policy_score,scorer,entropy_object
-    
+
 class mat_GRU_cell(torch.nn.Module):
     def __init__(self,args1):
         super().__init__()
@@ -74,12 +68,12 @@ class mat_GRU_cell(torch.nn.Module):
         
         # self.choose_topk = TopK(feats = args.rows,
         #                         k = args.cols)
-        self.RLM = RLM()
+        self.choose_topk = TopK_with_h()
 
     def forward(self,prev_Q,prev_Z,mask,ht):
 
 
-        z_topk,policy_score,scorer,entropy_object,topk_indices_out = self.RLM(prev_Z,mask,ht)
+        z_topk,policy_score,scorer,entropy_object,topk_indices_out = self.choose_topk(prev_Z,mask,ht)
         update = self.update(z_topk,prev_Q)
         reset = self.reset(z_topk,prev_Q)
 
@@ -116,7 +110,39 @@ class mat_GRU_gate(torch.nn.Module):
                               self.bias)
 
         return out
-class RLM(torch.nn.Module):
+
+class TopK(torch.nn.Module):
+    def __init__(self,feats,k):
+        super().__init__()
+        self.scorer = Parameter(torch.Tensor(feats,1))
+        self.reset_param(self.scorer)
+        
+        self.k = k
+
+    def reset_param(self,t):
+        #Initialize based on the number of rows
+        stdv = 1. / math.sqrt(t.size(0))
+        t.data.uniform_(-stdv,stdv)
+
+    def forward(self,node_embs,mask):
+        batch_size,graph_size,feat_size = node_embs.shape
+        scores = node_embs.matmul(self.scorer) / self.scorer.norm()
+        scores = scores.squeeze() + mask
+        vals, topk_indices = scores.view(batch_size,-1).topk(self.k,dim=1)
+        topk_indices = topk_indices[vals > -float("Inf")].view(batch_size,-1)
+        if topk_indices.size(1) < self.k:
+            topk_indices = u.pad_with_last_val(topk_indices,self.k)
+        tanh = torch.nn.Tanh()
+
+        if isinstance(node_embs, torch.sparse.FloatTensor) or \
+           isinstance(node_embs, torch.cuda.sparse.FloatTensor):
+            node_embs = node_embs.to_dense()
+        out = node_embs.gather(1,topk_indices.unsqueeze(-1).expand(-1,-1,feat_size)) * tanh(scores.gather(1,topk_indices)).unsqueeze(-1)
+        #we need to transpose the output
+        return out.transpose(1,2)
+    
+    
+class TopK_with_h(torch.nn.Module):
 
     def __init__(self):
         super().__init__()

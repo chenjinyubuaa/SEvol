@@ -1,3 +1,5 @@
+
+from numpy.core.fromnumeric import clip
 import torch
 import torch.nn as nn
 from torch.autograd import Variable
@@ -5,7 +7,7 @@ import torch.nn.functional as F
 from torch.nn.modules import activation
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 from param import args
-from SEvol import SEM
+from SEM import SEM
 import math
 class ObjEncoder(nn.Module):
     ''' Encodes object labels using GloVe. '''
@@ -37,10 +39,6 @@ class EncoderLSTM(nn.Module):
         self.num_directions = 2 if bidirectional else 1
         self.num_layers = num_layers
         self.embedding = nn.Embedding(vocab_size, embedding_size, padding_idx)
-        elif glove is not None:
-            print('Using glove word embedding')
-            self.embedding.weight.data[...] = torch.from_numpy(glove)
-            self.embedding.weight.requires_grad = False
         input_size = embedding_size
         self.lstm = nn.LSTM(input_size, hidden_size, self.num_layers,
                             batch_first=True, dropout=dropout_ratio, 
@@ -179,7 +177,7 @@ class ASODecoderLSTM(nn.Module):
         self.drop = nn.Dropout(p=dropout_ratio)
         self.drop_env = nn.Dropout(p=args.featdropout)
         self.feat_att_layer = SoftDotAttention(hidden_size, args.visual_feat_size+args.angle_feat_size)
-        self.lstm = nn.LSTMCell(action_embed_size+args.visual_feat_size+args.angle_feat_size, hidden_size)
+        self.lstm = nn.LSTMCell(action_embed_size+args.visual_feat_size+args.angle_feat_size + args.gcn_dim, hidden_size)
 
         self.action_att_layer = SoftDotAttention(hidden_size, hidden_size)
         self.subject_att_layer = SoftDotAttention(hidden_size, hidden_size)
@@ -202,7 +200,7 @@ class ASODecoderLSTM(nn.Module):
         self.lstm_out_mapping = nn.Sequential(nn.Linear(args.glove_dim+hidden_size,hidden_size),nn.Tanh())
         if args.egcn_activation == 'relu':
             self.activation = torch.nn.RReLU()
-        self.SEvol = SEM(args, self.activation)
+        self.egcn = SEM(args, self.activation)
 #        cand attention layer
         self.cand_att_a = SoftDotAttention(hidden_size, hidden_size)
         self.cand_att_s = SoftDotAttention(hidden_size, hidden_size)
@@ -232,7 +230,7 @@ class ASODecoderLSTM(nn.Module):
                 near_visual_mask, near_visual_feat, near_angle_feat,
                 near_obj_mask, near_obj_feat, near_edge_feat,near_id_feat,
                 h_0, prev_h1, c_0,
-                ctx, ctx_mask=None,
+                ctx, ctx_mask=None,clip_language_feature=None,
                 already_dropfeat=False):
         action_embeds = self.action_embedding(action)
         action_embeds = self.drop(action_embeds)
@@ -263,18 +261,24 @@ class ASODecoderLSTM(nn.Module):
         object_graph_feat = self.object_mapping(object_graph_feat)
         prev_h1_drop = self.drop(prev_h1)
         attn_feat, _ = self.feat_att_layer(prev_h1_drop, feature, output_tilde=False)
-        concat_input = torch.cat((action_embeds, attn_feat), dim=-1)
+        di = adj_list.sum(dim=1)
+        di = di.pow(-1/2)
+        weight = di.unsqueeze(1)*adj_list*di.unsqueeze(-1)
+        node_embs = self.activation(weight.matmul(object_graph_feat.matmul(self.static_weights)))
+        node_feat,_ = self.object_graph_att_in(prev_h1,node_embs,output_tilde=False)
+        concat_input = torch.cat((action_embeds, attn_feat, node_feat), dim=-1)
         h_1, c_1 = self.lstm(concat_input, (prev_h1, c_0))
         h_1_drop = self.drop(h_1)
         object_h1_drop = h_1_drop
         object_ctx = ctx.detach()
         selector,_, _ = self.topk_att_layer(object_h1_drop,object_ctx,ctx_mask)
-        node_feats,score_policy,scorer,entropy_object = self.SEvol(adj_list,object_graph_feat,mask,selector)
+        node_feats,score_policy,scorer,entropy_object = self.egcn(adj_list,object_graph_feat,mask,selector)
         node_feats = self.object_mapping_out(node_feats)
         node_feat, _ = self.object_graph_att(h_1_drop,node_feats, output_tilde=False)
         h_1_drop =self.drop(self.lstm_out_mapping(torch.cat([h_1_drop,node_feat],-1)))
         h_a, u_a, _ = self.action_att_layer(h_1_drop, ctx, ctx_mask)
-        h_s, u_s, _ = self.subject_att_layer(h_1_drop, ctx, ctx_mask)x
+        h_s, u_s, _ = self.subject_att_layer(h_1_drop, ctx, ctx_mask)
+        h_s = (h_s + clip_language_feature)/2
         h_o, u_o, _ = self.object_att_layer(h_1_drop, ctx, ctx_mask)
         h_a_drop, u_a_drop = self.drop(h_a), self.drop(u_a)
         h_s_drop, u_s_drop = self.drop(h_s), self.drop(u_s)
@@ -428,3 +432,16 @@ class SpeakerDecoder(nn.Module):
         logit = self.projection(x)
 
         return logit, h1, c1
+    
+import clip
+class CLIP_language(nn.Module):
+
+    def __init__(self):
+        super().__init__()
+        self.model,preprocess = clip.load('RN101')
+    
+    def forward(self,text_list):
+        with torch.no_grad():
+            text = clip.tokenize(text_list,truncate=True).cuda()
+            text_features = self.model.encode_text(text)
+        return text_features

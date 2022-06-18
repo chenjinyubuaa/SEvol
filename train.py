@@ -28,15 +28,18 @@ log_dir = 'snap/%s' % args.name
 if not os.path.exists(log_dir):
     os.makedirs(log_dir)
 
-TRAIN_VOCAB = None
-TRAINVAL_VOCAB = None
+TRAIN_VOCAB = 'tasks/R2R/data/train_vocab.txt'
+TRAINVAL_VOCAB = 'tasks/R2R/data/trainval_vocab.txt'
 
 IMAGENET_FEATURES = 'img_features/ResNet-152-imagenet.tsv'
 PLACE365_FEATURES = 'img_features/ResNet-152-places365.tsv'
+CLIP_FEATURES = 'img_features/CLIP-ViT-B-32-views.tsv'
 if args.features == 'imagenet':
     features = IMAGENET_FEATURES
 elif args.features == 'places365':
     features = PLACE365_FEATURES
+elif args.features == 'clip':
+    features = CLIP_FEATURES
 else:
     raise NotImplementedError
 
@@ -50,11 +53,170 @@ print(args)
 
 
 def train_speaker(train_env, tok, n_iters, log_every=500, val_envs={}):
-   return None
+    writer = SummaryWriter(logdir=log_dir)
+    listener = Seq2SeqAgent(train_env, "", tok, args.maxAction)
+    speaker = Speaker(train_env, listener, tok)
+
+    if args.fast_train:
+        log_every = 40
+
+    best_bleu = defaultdict(lambda: 0)
+    best_loss = defaultdict(lambda: 1232)
+    for idx in range(0, n_iters, log_every):
+        interval = min(log_every, n_iters - idx)
+
+        # Train for log_every interval
+        speaker.env = train_env
+        t0 = time.time()
+        speaker.train(interval)   # Train interval iters
+        t1 = time.time()
+
+        print()
+        print("Iter: {}, time: {:.3f}".format(idx, t1 - t0))
+
+        # Evaluation
+        for env_name, (env, evaluator) in val_envs.items():
+            if 'train' in env_name: # Ignore the large training set for the efficiency
+                continue
+
+            print("............ Evaluating %s ............." % env_name)
+            speaker.env = env
+            path2inst, loss, word_accu, sent_accu = speaker.valid()
+            path_id = next(iter(path2inst.keys()))
+            print("Inference: ", tok.decode_sentence(path2inst[path_id]))
+            print("GT: ", evaluator.gt[str(path_id)]['instructions'])
+            bleu_score, precisions = evaluator.bleu_score(path2inst)
+
+            # Tensorboard log
+            writer.add_scalar("bleu/%s" % (env_name), bleu_score, idx)
+            writer.add_scalar("loss/%s" % (env_name), loss, idx)
+            writer.add_scalar("word_accu/%s" % (env_name), word_accu, idx)
+            writer.add_scalar("sent_accu/%s" % (env_name), sent_accu, idx)
+            writer.add_scalar("bleu4/%s" % (env_name), precisions[3], idx)
+
+            # Save the model according to the bleu score
+            if bleu_score > best_bleu[env_name]:
+                best_bleu[env_name] = bleu_score
+                print('Save the model with %s BEST env bleu %0.4f' % (env_name, bleu_score))
+                speaker.save(idx, os.path.join(log_dir, 'state_dict', 'best_%s_bleu' % env_name))
+
+            if loss < best_loss[env_name]:
+                best_loss[env_name] = loss
+                print('Save the model with %s BEST env loss %0.4f' % (env_name, loss))
+                speaker.save(idx, os.path.join(log_dir, 'state_dict', 'best_%s_loss' % env_name))
+
+            # Screen print out
+            print("Bleu 1: %0.4f Bleu 2: %0.4f, Bleu 3 :%0.4f,  Bleu 4: %0.4f" % tuple(precisions))
 
 
 def train(train_env, tok, n_iters, log_every=100, val_envs={}, aug_env=None):
-    return None
+    writer = SummaryWriter(logdir=log_dir)
+    listener = Seq2SeqAgent(train_env, "", tok, args.maxAction)
+
+    speaker = None
+    if args.self_train:
+        speaker = Speaker(train_env, listener, tok)
+        if args.speaker is not None:
+            print("Load the speaker from %s." % args.speaker)
+            speaker.load(args.speaker)
+
+    start_iter = 0
+    if args.load is not None:
+        print("LOAD THE listener from %s" % args.load)
+        start_iter = listener.load(os.path.join(args.load))
+
+    start = time.time()
+
+    best_val = {'val_unseen': {"accu": 0., "state":"", 'update':False}}
+    if args.fast_train:
+        log_every = 40
+    for idx in range(start_iter, start_iter+n_iters, log_every):
+        listener.logs = defaultdict(list)
+        interval = min(log_every, n_iters-idx)
+        iter = idx + interval
+
+        t0 = time.time()
+        # Train for log_every interval
+        if aug_env is None:     # The default training process
+            listener.env = train_env
+            listener.train(interval, feedback=feedback_method)   # Train interval iters
+        else:
+            jdx_length = len(range(interval // 2))
+            for jdx in range(interval//2): #back_transition
+                listener.zero_grad()
+                listener.env = train_env
+                args.ml_weight = 0.2
+                listener.accumulate_gradient(feedback_method)
+                
+                listener.env = aug_env
+                args.ml_weight = 0.6
+                listener.accumulate_gradient(feedback_method, speaker=speaker)
+                listener.optim_step()
+
+                utils.print_progress(jdx, jdx_length, prefix='Progress:', suffix='Complete', bar_length=50)
+        t1 = time.time()
+        print('iter: {}, time: {:.3f}'.format(idx, t1 - t0))
+
+        # Log the training stats to tensorboard
+        total = max(sum(listener.logs['total']), 1) # total actions / interval / args.batch_size
+        length = max(len(listener.logs['critic_loss']), 1) # max action length / interval
+        critic_loss = sum(listener.logs['critic_loss']) / total #/ length / args.batchSize
+        RL_loss = sum(listener.logs['RL_loss']) / max(len(listener.logs['RL_loss']), 1)
+        IL_loss = sum(listener.logs['IL_loss']) / max(len(listener.logs['IL_loss']), 1)
+        entropy = sum(listener.logs['entropy']) / total #/ length / args.batchSize
+        writer.add_scalar("loss/critic", critic_loss, idx)
+        writer.add_scalar("loss/RL_loss", RL_loss, idx)
+        writer.add_scalar("loss/IL_loss", IL_loss, idx)
+        writer.add_scalar("policy_entropy", entropy, idx)
+        writer.add_scalar("total_actions", total, idx)
+        writer.add_scalar("max_length", length, idx)
+        print("total_actions", total)
+        print("max_length", length)
+
+        # Run validation
+        loss_str = ""
+        for env_name, (env, evaluator) in val_envs.items():
+            listener.env = env
+
+            # Get validation loss under the same conditions as training
+            iters = None if args.fast_train or env_name != 'train' else 20     # 20 * 64 = 1280
+
+            # Get validation distance from goal under test evaluation conditions
+            listener.test(use_dropout=False, feedback='argmax', iters=iters)
+            result = listener.get_results()
+            score_summary, _ = evaluator.score(result)
+            loss_str += "{:<11s} : ".format(env_name)
+            for metric,val in score_summary.items():
+                if metric in ['success_rate']:
+                    writer.add_scalar("accuracy/%s" % env_name, val, idx)
+                    if env_name in best_val:
+                        if val > best_val[env_name]['accu']:
+                            best_val[env_name]['accu'] = val
+                            best_val[env_name]['update'] = True
+                loss_str += ' %s: %.3f' % (metric, val)
+            loss_str += '\n'
+
+        for env_name in best_val:
+            if best_val[env_name]['update']:
+                best_val[env_name]['state'] = 'Iter %d \n %s' % (iter, loss_str)
+                best_val[env_name]['update'] = False
+                listener.save(idx, os.path.join("snap", args.name, "state_dict", "best_%s" % (env_name)))
+
+        print(('%s (%d %d%%)' % (timeSince(start, float(iter)/n_iters),
+                                                iter, float(iter)/n_iters*100)))
+                                                
+        print(('%s (%d %d%%)' % (timeSince(start, float(iter)/n_iters),
+                                                iter, float(iter)/n_iters*100)),file=DEBUG_FILE)
+        print(loss_str)
+        print(loss_str,file=DEBUG_FILE)
+        if iter%2000 == 0:
+            print("BEST RESULT TILL NOW")
+            print("BEST RESULT TILL NOW",file=DEBUG_FILE)
+            for env_name in best_val:
+                print(env_name, best_val[env_name]['state'])
+
+    listener.save(idx, os.path.join("snap", args.name, "state_dict", "LAST_iter%d" % (idx)))
+
 
 def valid(train_env, tok, val_envs={}):
     agent = Seq2SeqAgent(train_env, "", tok, args.maxAction)
@@ -104,7 +266,7 @@ def train_val():
     if args.debug:
         from collections import defaultdict
         feat_dict = defaultdict(lambda:np.zeros((36,2048),dtype=np.float32))
-        featurized_scans = set(json.load(open('./methods/neural_symbolic/debug_featurized_scans.json','r')))
+        featurized_scans = set(json.load(open('img_features/debug.json','r')))
         args.views = 36
     else:
         feat_dict = read_img_features(features)
@@ -157,8 +319,8 @@ def train_val():
 
 def valid_speaker(tok, val_envs):
     import tqdm
-    listner = Seq2SeqAgent(None, "", tok, args.maxAction)
-    speaker = Speaker(None, listner, tok)
+    listener = Seq2SeqAgent(None, "", tok, args.maxAction)
+    speaker = Speaker(None, listener, tok)
     speaker.load(args.load)
 
     for env_name, (env, evaluator) in val_envs.items():
@@ -179,6 +341,49 @@ def valid_speaker(tok, val_envs):
         print(score_string)
         print("Average Length %0.4f" % utils.average_length(path2inst))
 
+
+def train_val_augment():
+    """
+    Train the listener with the augmented data
+    """
+    setup()
+
+    # Create a batch training environment that will also preprocess text
+    vocab = read_vocab(TRAIN_VOCAB)
+    tok = Tokenizer(vocab=vocab, encoding_length=args.maxInput)
+
+    # Load the env img features
+    feat_dict = read_img_features(features)
+    with open('./img_features/objects/pano_object_class.pkl', 'rb') as f:
+        obj_dict = pkl.load(f)
+    featurized_scans = set([key.split("_")[0] for key in list(feat_dict.keys())])
+
+    # Load the augmentation data
+    aug_path = args.aug
+
+    # Create the training environment
+    train_env = R2RBatch(feat_dict, obj_dict, batch_size=args.batchSize,
+                         splits=['train'], tokenizer=tok)
+    aug_env   = R2RBatch(feat_dict, obj_dict, batch_size=args.batchSize,
+                         splits=[aug_path], tokenizer=tok, name='aug')
+
+    # Printing out the statistics of the dataset
+    stats = train_env.get_statistics()
+    print("The training data_size is : %d" % train_env.size())
+    print("The average instruction length of the dataset is %0.4f." % (stats['length']))
+    print("The average action length of the dataset is %0.4f." % (stats['path']))
+    stats = aug_env.get_statistics()
+    print("The augmentation data size is %d" % aug_env.size())
+    print("The average instruction length of the dataset is %0.4f." % (stats['length']))
+    print("The average action length of the dataset is %0.4f." % (stats['path']))
+
+    # Setup the validation data
+    val_envs = {split: (R2RBatch(feat_dict, obj_dict, batch_size=args.batchSize, splits=[split],
+                                 tokenizer=tok), Evaluation([split], featurized_scans, tok))
+                for split in ['train', 'val_seen', 'val_unseen']}
+
+    # Start training
+    train(train_env, tok, args.iters, val_envs=val_envs, aug_env=aug_env)
 
 
 if __name__ == "__main__":

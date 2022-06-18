@@ -36,7 +36,7 @@ class Param:
         self.parser.add_argument("--mlWeight", dest='ml_weight', type=float, default=0.05)
         self.parser.add_argument("--teacherWeight", dest='teacher_weight', type=float, default=1.)
         self.parser.add_argument("--accumulateGrad", dest='accumulate_grad', action='store_const', default=False, const=True)
-        self.parser.add_argument("--features", type=str, default='imagenet')
+        self.parser.add_argument("--features", type=str, default='clip')
         self.parser.add_argument("--zero_feature", dest="zero_feature", action="store_const", default=False, const=True)
         self.parser.add_argument('--debug',action='store_true')
         # Env Dropout Param
@@ -62,8 +62,6 @@ class Param:
         self.parser.add_argument('--teacher', type=str, default='final',
                             help="How to get supervision. one of ``next`` and ``final`` ")
         self.parser.add_argument('--epsilon', type=float, default=0.1)
-        self.parser.add_argument('--static_gcn_weights',action='store_true',default=False)
-        self.parser.add_argument('--static_gcn_weights_only',action='store_true',default=False)
 
         # Model hyper params:
         self.parser.add_argument('--rnnDim', dest="rnn_dim", type=int, default=512)
@@ -90,6 +88,7 @@ class Param:
         self.parser.add_argument("--gcn_dim",type=int,default=100)
         self.parser.add_argument("--egcn_activation",type=str,default='relu')
         self.parser.add_argument("--distance_decay_function",type=str,default='exp')
+
         #debug
         self.parser.add_argument("--top_N_obj", dest="top_N_obj", type=int, default=8)
         self.parser.add_argument("--glove_dim", dest='glove_dim', type=int, default=300)

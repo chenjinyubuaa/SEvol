@@ -46,7 +46,7 @@ class EnvBatch():
             self.features = feature_store
             self.feature_size = 2048
         if args.debug:
-            self.featurized_scans = set(json.load(open('./methods/neural_symbolic/debug_featurized_scans.json','r')))
+            self.featurized_scans = set(json.load(open('img_features/debug.json','r')))
         else:
             self.featurized_scans = set([key.split("_")[0] for key in list(self.features.keys())])
         self.batch_size = batch_size
