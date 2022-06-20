@@ -1,4 +1,4 @@
-# CKR-nav
+# SEvol
 Code for our CVPR 2021 paper "[Reinforced Structured State-Evolution for Vision-Language Navigation](https://openaccess.thecvf.com/content/CVPR2022/html/Chen_Reinforced_Structured_State-Evolution_for_Vision-Language_Navigation_CVPR_2022_paper.html)".
 
 Contributed by [Jinyu Chen](https://scholar.google.com/citations?hl=zh-CN&user=9v4HaLEAAAAJ), [Chen Gao](http://chengaopro.github.io/), Erli Meng, Qiong Zhang, [Si Liu](https://scholar.google.com/citations?user=-QtVtNEAAAAJ&hl=zh-CN&oi=ao)
