@@ -24,23 +24,23 @@ Contributed by [Jinyu Chen](https://scholar.google.com/citations?hl=zh-CN&user=9
 ## Training and Test
 ### Dataset Preparation
 
-Please download the data and pretrained checkpoints from [here](). put the `img_features` and `task` directory under the `Matterport3DSimulator` directory.
+Please download the data and pretrained checkpoints from [here](https://drive.google.com/file/d/1DTjIUJQbCPThQui-xJQqFJ8stj5_4Ze7/view?usp=sharing). put the `img_features` and `task` directory under the `Matterport3DSimulator` directory.
 ### Training
 
 Following [Speaker-follower](https://github.com/ronghanghu/speaker_follower) and [EnvDrop](https://github.com/airsplay/R2R-EnvDrop), we train our model on R2R as follows:
 
 1. Train the `speaker` model under the Matterport3DSimulator:
 ~~~
-    bash methods/SEvol/run/train_speaker.sh
+    bash methods/SEvol/run/train_speaker.sh 0
 ~~~
 
 2. Train the `follower` model:
 ~~~
-    bash methods/SEvol/run/train_r2r.sh
+    bash methods/SEvol/run/train_r2r.sh 0
 ~~~
 3. train with the back translation data augmentation:
 ~~~
-    bash methods/SEvol/run/train_r2r_bt.sh
+    bash methods/SEvol/run/train_r2r_bt.sh 0
 ~~~
 We use the speaker model with best bleu and the follower model with the best SR on val-unseen split for the 3rd stage training
 ### Test
@@ -66,4 +66,4 @@ Please consider citing this project in your publications if it helps your resear
 ## License
 CKR-nav is released under the MIT license. See [LICENSE](LICENSE) for additional details.
 ## Acknowledge
-Some of the codes are built upon [NvEM](https://github.com/MarSaKi/NvEM). Thanks them for their great works!
+Some of the codes are built upon [NvEM](https://github.com/MarSaKi/NvEM) and [EnvDrop](https://github.com/airsplay/R2R-EnvDrop). Thanks them for their great works!
