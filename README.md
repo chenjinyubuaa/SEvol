@@ -47,7 +47,7 @@ We use the speaker model with best bleu and the follower model with the best SR 
 1. Use the valid.sh to test the checkpoints. Just change the checkpoint path in it
 
     ```
-    bash methods/SEvol/run/valid.sh
+    bash methods/SEvol/run/valid.sh 0
     ```
 
 ## Citation
