@@ -9,5 +9,3 @@ flag="--attn soft --train listener
 mkdir -p snap/$name
 CUDA_VISIBLE_DEVICES=$1 python3 methods/Sevol/train.py $flag --name $name 
 
-# Try this with file logging:
-# CUDA_VISIBLE_DEVICES=$1 unbuffer python r2r_src/train.py $flag --name $name | tee snap/$name/log
