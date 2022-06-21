@@ -5,7 +5,7 @@ flag="--attn soft --train auglistener --selfTrain
       --load methods/SEvol/snaps/w_o_data_aug_best/best_val_unseen
       --visual_feat --angle_feat
       --top_N_obj 8
-      --gcn_topk 5 --glove_dim 300 --top_N_obj 8 --distance_decay_function same
+      --gcn_topk 5 --glove_dim 300 --distance_decay_function same
       --accumulateGrad
       --featdropout 0.4
       --subout max --dropout 0.5 --optim rms --lr 1e-4 --iters 200000 --maxAction 20"
