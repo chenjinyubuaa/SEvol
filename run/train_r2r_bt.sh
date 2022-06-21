@@ -13,4 +13,4 @@ mkdir -p snap/$name
 CUDA_VISIBLE_DEVICES=$1 python3 methods/nvem/train.py $flag --name $name 
 
 # Try this with file logging:
-# CUDA_VISIBLE_DEVICES=$1 unbuffer python r2r_src/train.py $flag --name $name | tee snap/$name/log
+# CUDA_VISIBLE_DEVICES=$1 unbuffer python methods/SEvol/train.py $flag --name $name | tee snap/$name/log
