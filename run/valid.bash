@@ -7,7 +7,5 @@ flag="--attn soft --train validlistener
       --glove_dim 300  --submit
       --subout max --dropout 0.5 --maxAction 25"
 mkdir -p snap/$name
-CUDA_VISIBLE_DEVICES=$1 coverage run methods/nvem/train.py $flag --name $name 
+CUDA_VISIBLE_DEVICES=$1 coverage run methods/SEvol/train.py $flag --name $name 
 
-# Try this with file logging:
-# CUDA_VISIBLE_DEVICES=$1 unbuffer python r2r_src/train.py $flag --name $name | tee snap/$name/logz
