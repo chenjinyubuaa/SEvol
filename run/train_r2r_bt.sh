@@ -10,7 +10,7 @@ flag="--attn soft --train auglistener --selfTrain
       --featdropout 0.4
       --subout max --dropout 0.5 --optim rms --lr 1e-4 --iters 200000 --maxAction 20"
 mkdir -p snap/$name
-CUDA_VISIBLE_DEVICES=$1 python3 methods/nvem/train.py $flag --name $name 
+CUDA_VISIBLE_DEVICES=$1 python3 methods/SEvol/train.py $flag --name $name 
 
 # Try this with file logging:
 # CUDA_VISIBLE_DEVICES=$1 unbuffer python methods/SEvol/train.py $flag --name $name | tee snap/$name/log
